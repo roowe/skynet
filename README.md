@@ -40,6 +40,8 @@ The build installs executables in `zig-out/bin` and modules in `zig-out/cservice
 SKYNET_BUILD_PREFIX=. ./skynet test/config.build_smoke
 ```
 
+See the [Zig migration roadmap](docs/roadmap.md) for upcoming milestones and acceptance criteria.
+
 ## Test
 
 Run these in different consoles:
