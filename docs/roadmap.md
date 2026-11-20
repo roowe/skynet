@@ -5,8 +5,8 @@
 ## 当前基线
 
 - 上游基线为 [`12a5e47`](https://github.com/cloudwu/skynet/commit/12a5e47eafb8ed93115ffe9ac776aec5d59655b3)。迁移在 `roowe/skynet` 的 `codex/zig-build` 分支进行。
-- [`build.zig`](../build.zig) 用 Zig `0.17.1` 在 Apple Silicon macOS 上构建 Skynet。Zig 构建使用 Zig 时间轮，Make 构建使用 C 时间轮。
-- [`zig build smoke`](../test/build_smoke.lua) 与 Make 产物共用离线测试，覆盖 Lua 启动、动态库加载、消息往返和定时器。构建命令见 [README](../README.md#build-with-zig-on-apple-silicon-macos)。
+- [`build.zig`](../build.zig) 用 Zig `0.17.1` 在 Apple Silicon macOS 和原生 glibc Linux 上构建 Skynet。Zig 构建使用 Zig 时间轮，Make 构建使用 C 时间轮。
+- [`zig build smoke`](../test/build_smoke.lua) 与 Make 产物共用离线测试，覆盖 Lua 启动、动态库加载、消息往返和定时器。构建命令见 [README](../README.md#build-with-zig)。
 
 ## 里程碑
 
@@ -14,19 +14,19 @@
 | --- | --- | --- |
 | 0 · 已完成 | 用 Zig 构建现有 C 代码 | Make、Zig Debug 和 Zig fast 通过同一套冒烟测试 |
 | 1 · 已完成 | 迁移 [`skynet_timer.c`](../skynet-src/skynet_timer.c) 的时间轮 | `zig build test-timer` 对照 C 和 Zig 的投递顺序、跨桶、`u32` 回绕和单次投递。C 桥负责立即投递、`PTYPE_RESPONSE` 和 10 ms 时钟 |
-| 2 · 下一步 | 补齐 Linux 的 Zig 构建 | 在 Linux 原生验证 jemalloc、主程序符号导出、动态模块加载及同一套冒烟测试 |
-| 3 | 先迁 [`skynet_mq.c`](../skynet-src/skynet_mq.c)，再迁 [`skynet_handle.c`](../skynet-src/skynet_handle.c)、服务生命周期和 worker 调度 | 验证服务内 FIFO、就绪队列去重、worker 交接时同一服务回调串行。并发 `grab/retire` 时引用有效，退出后待处理消息按所有权约定释放 |
+| 2 | 补齐 Linux 的 Zig 构建 | [Linux CI](../.github/workflows/zig-linux.yml) 验证 jemalloc、主程序符号导出、动态模块加载及同一套冒烟测试 |
+| 3 · 下一步 | 先迁 [`skynet_mq.c`](../skynet-src/skynet_mq.c)，再迁 [`skynet_handle.c`](../skynet-src/skynet_handle.c)、服务生命周期和 worker 调度 | 验证服务内 FIFO、就绪队列去重、worker 交接时同一服务回调串行。并发 `grab/retire` 时引用有效，退出后待处理消息按所有权约定释放 |
 | 4 | 迁移 [`socket_server.c`](../skynet-src/socket_server.c) 和 socket 事件桥接 | macOS `kqueue`、Linux `epoll` 各跑回环测试，覆盖连接、部分读写、待发数据期间关闭与缓冲区回收 |
 | 5 | 迁移 [`service-src/`](../service-src) 内的原生系统模块 | `logger` 可独立迁移。`gate`、`harbor` 等 socket 契约稳定后再迁。`snlua` 单独验证 Lua 状态创建、初始化失败与释放 |
 
 ## 下一步如何开工
 
-1. 用 `make linux` 建立原生对照，确认 jemalloc 和 ELF 插件的符号解析。
-2. 增加 Linux Zig 构建，在 Linux 上跑 `zig build test-timer smoke`，再用同一冒烟脚本验证 Make 产物。
+1. 给 C 消息队列记录 FIFO、扩容、就绪队列去重和服务退出时的释放行为。
+2. 用 Zig 实现后跑同一套用例，并保留 Make 对照。随后再迁 handle 和服务生命周期。
 
 ## 每次合入的条件
 
-- 每个实现从 `codex/zig-build` 创建独立 worktree，验证后向该分支提 PR。
+- 每个实现创建独立 worktree，验证后向 `codex/zig-build` 提 PR。依赖尚未合入时，PR 先指向前置分支。
 - 保持模块名、导出符号、Lua API、消息格式和分配释放协议。跨 C/Zig 边界沿用头文件中的类型与调用约定，优先让内部结构保持私有。
 - 每次只替换一个可验证的边界。先提交行为等价的移植，再提交会改变行为的加固。加固测试应能在旧实现上暴露对应问题。
 - 并发与 I/O 测试在对应平台运行。Make 暂作 C 对照和其他平台的构建入口。模块完成行为对照和平台验证后，收口临时切换逻辑。
