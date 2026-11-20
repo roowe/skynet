@@ -40,13 +40,13 @@ jobs:
         env:
           MAKEFLAGS: -j2
         run: |
-          timeout 330s zig build test-timer smoke -j2 --summary all
+          timeout 330s zig build test-timer test-mq smoke -j2 --summary all
           test ! -e 3rd/jemalloc/Makefile
           nm -D --defined-only zig-out/bin/skynet | awk '
             $3 ~ /^(je_malloc|malloc|skynet_callback|luaL_setfuncs)$/ { print; found[$3] = 1 }
             END { exit !(found["je_malloc"] && found["malloc"] && found["skynet_callback"] && found["luaL_setfuncs"]) }
           '
-          timeout 330s zig build test-timer smoke -j2 --release=fast --prefix zig-out/fast --summary all
+          timeout 330s zig build test-timer test-mq smoke -j2 --release=fast --prefix zig-out/fast --summary all
 
       - name: Make reference build
         shell: bash
