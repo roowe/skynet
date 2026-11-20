@@ -27,14 +27,15 @@ For FreeBSD , use gmake instead of make.
 
 ### Build with Zig on Apple Silicon macOS
 
-From the repository root, use Zig 0.17.1 to build the C runtime, bundled Lua, and native modules:
+From the repository root, use Zig 0.17.1 to build Skynet with the Zig timer wheel, bundled Lua, and native modules:
 
 ```sh
 zig build
+zig build test-timer
 zig build smoke
 ```
 
-The build installs executables in `zig-out/bin` and modules in `zig-out/cservice` and `zig-out/luaclib`. The smoke test runs a single node without opening network ports. To run the same test against a `make macosx` build:
+The build installs executables in `zig-out/bin` and modules in `zig-out/cservice` and `zig-out/luaclib`. The timer tests check the C and Zig wheels against the same expected delivery sequence. The smoke test runs a single node without opening network ports. To run the same smoke test against a `make macosx` build:
 
 ```sh
 SKYNET_BUILD_PREFIX=. ./skynet test/config.build_smoke

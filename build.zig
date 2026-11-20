@@ -9,10 +9,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const smoke = b.step("smoke", "Verify Lua startup, plugin loading, messaging, and timers");
+    const test_timer = b.step("test-timer", "Compare C and Zig timer behavior with deterministic ticks");
     if (target.result.os.tag != .macos or target.result.cpu.arch != .aarch64) {
         const unsupported = b.addFail("this Zig build supports aarch64-macos only");
         b.getInstallStep().dependOn(&unsupported.step);
         smoke.dependOn(&unsupported.step);
+        test_timer.dependOn(&unsupported.step);
         return;
     }
 
@@ -65,13 +67,25 @@ pub fn build(b: *std.Build) void {
         .root = b.path("skynet-src"),
         .flags = &skynet_flags,
         .files = &.{
-            "skynet_main.c",   "skynet_handle.c", "skynet_module.c",  "skynet_mq.c",
-            "skynet_server.c", "skynet_start.c",  "skynet_timer.c",   "skynet_error.c",
-            "skynet_harbor.c", "skynet_env.c",    "skynet_monitor.c", "skynet_socket.c",
-            "socket_server.c", "mem_info.c",      "malloc_hook.c",    "skynet_daemon.c",
-            "skynet_log.c",
+            "skynet_main.c",   "skynet_handle.c",  "skynet_module.c", "skynet_mq.c",
+            "skynet_server.c", "skynet_start.c",   "skynet_error.c",  "skynet_harbor.c",
+            "skynet_env.c",    "skynet_monitor.c", "skynet_socket.c", "socket_server.c",
+            "mem_info.c",      "malloc_hook.c",    "skynet_daemon.c", "skynet_log.c",
         },
     });
+    skynet.root_module.addCSourceFile(.{
+        .file = b.path("skynet-src/skynet_timer.c"),
+        .flags = &(skynet_flags ++ [_][]const u8{"-DSKYNET_ZIG_TIMER"}),
+    });
+    const timer = b.addObject(.{
+        .name = "skynet-zig-timer",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("skynet-src/skynet_zig_timer.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    skynet.root_module.addObject(timer);
     b.installArtifact(skynet);
 
     for ([_][]const u8{ "snlua", "logger", "gate", "harbor" }) |name| {
@@ -105,6 +119,29 @@ pub fn build(b: *std.Build) void {
     run.expectStdOutMatch("skynet build smoke ok\n");
     run.step.dependOn(b.getInstallStep());
     smoke.dependOn(&run.step);
+
+    const c_timer_tests = b.addExecutable(.{
+        .name = "c-timer-tests",
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    c_timer_tests.root_module.addIncludePath(b.path("skynet-src"));
+    c_timer_tests.root_module.addCSourceFile(.{ .file = b.path("test/timer_wheel_c_test.c"), .flags = &skynet_flags });
+    test_timer.dependOn(&b.addRunArtifact(c_timer_tests).step);
+
+    const zig_timer_tests = b.addTest(.{
+        .name = "zig-timer-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/timer_wheel_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "timer_wheel", .module = b.createModule(.{
+                .root_source_file = b.path("skynet-src/skynet_timer_wheel.zig"),
+                .target = target,
+                .optimize = optimize,
+            }) }},
+        }),
+    });
+    test_timer.dependOn(&b.addRunArtifact(zig_timer_tests).step);
 }
 
 fn addPlugin(
