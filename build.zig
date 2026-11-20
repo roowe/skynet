@@ -76,6 +76,8 @@ pub fn build(b: *std.Build) void {
         const jemalloc = buildJemalloc(b);
         skynet.root_module.addIncludePath(jemalloc.path(b, "include/jemalloc"));
         skynet.root_module.addObjectFile(jemalloc.path(b, "lib/libjemalloc_pic.a"));
+        // jemalloc profiling uses the unwind ABI supplied implicitly by GCC.
+        skynet.root_module.linkSystemLibrary("unwind", .{ .use_pkg_config = .no });
         for ([_][]const u8{ "pthread", "m", "dl", "rt" }) |name| {
             skynet.root_module.linkSystemLibrary(name, .{});
         }
