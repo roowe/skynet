@@ -2,16 +2,17 @@ const std = @import("std");
 
 // Match the Make build for the C sources even in Zig's debug mode.
 const c_flags = [_][]const u8{ "-g", "-O2", "-Wall" };
-const lua_flags = c_flags ++ [_][]const u8{ "-std=gnu99", "-Wextra", "-DLUA_USE_MACOSX" };
-const skynet_flags = c_flags ++ [_][]const u8{"-DNOUSE_JEMALLOC"};
+const lua_c_flags = c_flags ++ [_][]const u8{ "-std=gnu99", "-Wextra" };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const smoke = b.step("smoke", "Verify Lua startup, plugin loading, messaging, and timers");
     const test_timer = b.step("test-timer", "Compare C and Zig timer behavior with deterministic ticks");
-    if (target.result.os.tag != .macos or target.result.cpu.arch != .aarch64) {
-        const unsupported = b.addFail("this Zig build supports aarch64-macos only");
+    const macos = target.result.os.tag == .macos and target.result.cpu.arch == .aarch64;
+    const linux = target.result.os.tag == .linux and target.result.isGnuLibC() and target.query.isNativeTriple();
+    if (!macos and !linux) {
+        const unsupported = b.addFail("this Zig build supports aarch64-macos and native Linux with glibc");
         b.getInstallStep().dependOn(&unsupported.step);
         smoke.dependOn(&unsupported.step);
         test_timer.dependOn(&unsupported.step);
@@ -23,9 +24,11 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
     });
     lua.root_module.addIncludePath(b.path("skynet-src"));
+    const lua_platform = if (linux) "LUA_USE_LINUX" else "LUA_USE_MACOSX";
+    lua.root_module.addCMacro(lua_platform, "1");
     lua.root_module.addCSourceFiles(.{
         .root = b.path("3rd/lua"),
-        .flags = &lua_flags,
+        .flags = &lua_c_flags,
         .files = &.{
             "lapi.c",     "lcode.c",    "lctype.c",  "ldebug.c",   "ldo.c",      "ldump.c",
             "lfunc.c",    "lgc.c",      "llex.c",    "lmem.c",     "lobject.c",  "lopcodes.c",
@@ -47,9 +50,15 @@ pub fn build(b: *std.Build) void {
             cli.link_gc_sections = false;
         }
         cli.root_module.linkLibrary(lua);
-        cli.root_module.linkSystemLibrary("readline", .{});
+        if (linux) {
+            cli.root_module.linkSystemLibrary("m", .{});
+            cli.root_module.linkSystemLibrary("dl", .{});
+        } else {
+            cli.root_module.linkSystemLibrary("readline", .{});
+        }
         cli.root_module.addIncludePath(b.path("skynet-src"));
-        cli.root_module.addCSourceFile(.{ .file = b.path(b.fmt("3rd/lua/{s}.c", .{name})), .flags = &lua_flags });
+        cli.root_module.addCMacro(lua_platform, "1");
+        cli.root_module.addCSourceFile(.{ .file = b.path(b.fmt("3rd/lua/{s}.c", .{name})), .flags = &lua_c_flags });
         b.installArtifact(cli);
     }
 
@@ -63,9 +72,21 @@ pub fn build(b: *std.Build) void {
     skynet.root_module.linkLibrary(lua);
     skynet.root_module.addIncludePath(b.path("3rd/lua"));
     skynet.root_module.addIncludePath(b.path("skynet-src"));
+    if (linux) {
+        const jemalloc = buildJemalloc(b);
+        skynet.root_module.addIncludePath(jemalloc.path(b, "include/jemalloc"));
+        skynet.root_module.addObjectFile(jemalloc.path(b, "lib/libjemalloc_pic.a"));
+        // jemalloc profiling uses the unwind ABI supplied implicitly by GCC.
+        skynet.root_module.linkSystemLibrary("unwind", .{ .use_pkg_config = .no });
+        for ([_][]const u8{ "pthread", "m", "dl", "rt" }) |name| {
+            skynet.root_module.linkSystemLibrary(name, .{});
+        }
+    } else {
+        skynet.root_module.addCMacro("NOUSE_JEMALLOC", "1");
+    }
     skynet.root_module.addCSourceFiles(.{
         .root = b.path("skynet-src"),
-        .flags = &skynet_flags,
+        .flags = &c_flags,
         .files = &.{
             "skynet_main.c",   "skynet_handle.c",  "skynet_module.c", "skynet_mq.c",
             "skynet_server.c", "skynet_start.c",   "skynet_error.c",  "skynet_harbor.c",
@@ -75,7 +96,7 @@ pub fn build(b: *std.Build) void {
     });
     skynet.root_module.addCSourceFile(.{
         .file = b.path("skynet-src/skynet_timer.c"),
-        .flags = &(skynet_flags ++ [_][]const u8{"-DSKYNET_ZIG_TIMER"}),
+        .flags = &(c_flags ++ [_][]const u8{"-DSKYNET_ZIG_TIMER"}),
     });
     const timer = b.addObject(.{
         .name = "skynet-zig-timer",
@@ -89,20 +110,21 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(skynet);
 
     for ([_][]const u8{ "snlua", "logger", "gate", "harbor" }) |name| {
-        addPlugin(b, target, optimize, "cservice", name, "service-src", &.{b.fmt("service_{s}.c", .{name})}, &.{});
+        _ = addPlugin(b, target, optimize, "cservice", name, "service-src", &.{b.fmt("service_{s}.c", .{name})}, &.{});
     }
-    addPlugin(b, target, optimize, "luaclib", "skynet", "lualib-src", &.{
+    _ = addPlugin(b, target, optimize, "luaclib", "skynet", "lualib-src", &.{
         "lua-skynet.c",    "lua-seri.c",      "lua-socket.c",       "lua-mongo.c",     "lua-netpack.c",
         "lua-memory.c",    "lua-multicast.c", "lua-cluster.c",      "lua-crypt.c",     "lsha1.c",
         "lua-sharedata.c", "lua-stm.c",       "lua-debugchannel.c", "lua-datasheet.c", "lua-sharetable.c",
     }, &.{"service-src"});
-    addPlugin(b, target, optimize, "luaclib", "client", "lualib-src", &.{
+    const client = addPlugin(b, target, optimize, "luaclib", "client", "lualib-src", &.{
         "lua-clientsocket.c", "lua-crypt.c", "lsha1.c",
     }, &.{});
-    addPlugin(b, target, optimize, "luaclib", "bson", "lualib-src", &.{"lua-bson.c"}, &.{});
-    addPlugin(b, target, optimize, "luaclib", "sproto", "lualib-src/sproto", &.{ "sproto.c", "lsproto.c" }, &.{});
-    addPlugin(b, target, optimize, "luaclib", "md5", "3rd/lua-md5", &.{ "md5.c", "md5lib.c", "compat-5.2.c" }, &.{});
-    addPlugin(b, target, optimize, "luaclib", "lpeg", "3rd/lpeg", &.{
+    if (linux) client.linkSystemLibrary("pthread", .{});
+    _ = addPlugin(b, target, optimize, "luaclib", "bson", "lualib-src", &.{"lua-bson.c"}, &.{});
+    _ = addPlugin(b, target, optimize, "luaclib", "sproto", "lualib-src/sproto", &.{ "sproto.c", "lsproto.c" }, &.{});
+    _ = addPlugin(b, target, optimize, "luaclib", "md5", "3rd/lua-md5", &.{ "md5.c", "md5lib.c", "compat-5.2.c" }, &.{});
+    _ = addPlugin(b, target, optimize, "luaclib", "lpeg", "3rd/lpeg", &.{
         "lpcap.c", "lpcode.c", "lpprint.c", "lptree.c", "lpvm.c", "lpcset.c",
     }, &.{});
 
@@ -125,7 +147,10 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
     });
     c_timer_tests.root_module.addIncludePath(b.path("skynet-src"));
-    c_timer_tests.root_module.addCSourceFile(.{ .file = b.path("test/timer_wheel_c_test.c"), .flags = &skynet_flags });
+    c_timer_tests.root_module.addCSourceFile(.{
+        .file = b.path("test/timer_wheel_c_test.c"),
+        .flags = &(c_flags ++ [_][]const u8{"-DNOUSE_JEMALLOC"}),
+    });
     test_timer.dependOn(&b.addRunArtifact(c_timer_tests).step);
 
     const zig_timer_tests = b.addTest(.{
@@ -144,6 +169,19 @@ pub fn build(b: *std.Build) void {
     test_timer.dependOn(&b.addRunArtifact(zig_timer_tests).step);
 }
 
+fn buildJemalloc(b: *std.Build) std.Build.LazyPath {
+    const revision = b.addSystemCommand(&.{ "git", "rev-parse", "HEAD:3rd/jemalloc" });
+    revision.setCwd(b.path("."));
+    revision.has_side_effects = true;
+
+    const run = b.addSystemCommand(&.{"bash"});
+    run.setName("Build vendored jemalloc");
+    run.addFileArg(b.path("tools/build-jemalloc.sh"));
+    run.addDirectoryArg2(b.path("3rd/jemalloc"), .{ .make_absolute = true });
+    run.addFileContentArg2(revision.captureStdOut(.{ .trim_whitespace = .trailing }), .{});
+    return run.addOutputDirectoryArg2("jemalloc", .{ .make_absolute = true });
+}
+
 fn addPlugin(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -153,7 +191,7 @@ fn addPlugin(
     source_dir: []const u8,
     sources: []const []const u8,
     include_dirs: []const []const u8,
-) void {
+) *std.Build.Module {
     const module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
     module.addIncludePath(b.path("3rd/lua"));
     module.addIncludePath(b.path("skynet-src"));
@@ -167,4 +205,5 @@ fn addPlugin(
         .dest_sub_path = b.fmt("{s}.so", .{name}),
     });
     b.getInstallStep().dependOn(&install.step);
+    return module;
 }

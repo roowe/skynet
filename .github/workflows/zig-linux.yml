@@ -1,0 +1,56 @@
+name: Zig Linux validation
+
+on:
+  push:
+    branches: [ 'codex/zig-*' ]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      ZIG_VERSION: '0.17.1'
+      ZIG_SHA256: '3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a'
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends autoconf build-essential m4
+          cd "$RUNNER_TEMP"
+          zig_dir="zig-x86_64-linux-$ZIG_VERSION"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://ziglang.org/download/$ZIG_VERSION/$zig_dir.tar.xz" -o "$zig_dir.tar.xz"
+          printf '%s  %s\n' "$ZIG_SHA256" "$zig_dir.tar.xz" | sha256sum --check --strict
+          tar -xf "$zig_dir.tar.xz"
+          printf '%s\n' "$RUNNER_TEMP/$zig_dir" >> "$GITHUB_PATH"
+
+      - name: Zig Debug and fast
+        shell: bash
+        env:
+          MAKEFLAGS: -j2
+        run: |
+          timeout 330s zig build test-timer smoke -j2 --summary all
+          test ! -e 3rd/jemalloc/Makefile
+          nm -D --defined-only zig-out/bin/skynet | awk '
+            $3 ~ /^(je_malloc|malloc|skynet_callback|luaL_setfuncs)$/ { print; found[$3] = 1 }
+            END { exit !(found["je_malloc"] && found["malloc"] && found["skynet_callback"] && found["luaL_setfuncs"]) }
+          '
+          timeout 330s zig build test-timer smoke -j2 --release=fast --prefix zig-out/fast --summary all
+
+      - name: Make reference build
+        shell: bash
+        run: |
+          make -j2 linux
+          SKYNET_BUILD_PREFIX=. timeout 20s ./skynet test/config.build_smoke | tee "$RUNNER_TEMP/make-smoke.log"
+          grep -Fx 'skynet build smoke ok' "$RUNNER_TEMP/make-smoke.log"

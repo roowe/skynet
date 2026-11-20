@@ -25,9 +25,15 @@ make
 
 For FreeBSD , use gmake instead of make.
 
-### Build with Zig on Apple Silicon macOS
+### Build with Zig
 
-From the repository root, use Zig 0.17.1 to build Skynet with the Zig timer wheel, bundled Lua, and native modules:
+Use Zig 0.17.1 on Apple Silicon macOS or native Linux with glibc. On Linux, install a C toolchain, Make, Autoconf, and m4, then initialize the pinned jemalloc submodule from the Git checkout:
+
+```sh
+git submodule update --init 3rd/jemalloc
+```
+
+On Linux, Zig builds jemalloc in its build cache. The Zig 0.17.1 compiler needs the `statx` system call to use that cache. Run these commands from the repository root:
 
 ```sh
 zig build
@@ -35,7 +41,7 @@ zig build test-timer
 zig build smoke
 ```
 
-The build installs executables in `zig-out/bin` and modules in `zig-out/cservice` and `zig-out/luaclib`. The timer tests check the C and Zig wheels against the same expected delivery sequence. The smoke test runs a single node without opening network ports. To run the same smoke test against a `make macosx` build:
+The build installs executables in `zig-out/bin` and modules in `zig-out/cservice` and `zig-out/luaclib`. The timer tests check the C and Zig wheels against the same expected delivery sequence. The smoke test runs a single node without opening network ports. To run the same smoke test against a `make macosx` or `make linux` build:
 
 ```sh
 SKYNET_BUILD_PREFIX=. ./skynet test/config.build_smoke
