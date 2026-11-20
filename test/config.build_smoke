@@ -1,0 +1,7 @@
+include "../examples/config.path"
+
+thread = 2
+harbor = 0
+start = "build_smoke"
+cpath = [[$SKYNET_BUILD_PREFIX/cservice/?.so]]
+lua_cpath = [[$SKYNET_BUILD_PREFIX/luaclib/?.so]]

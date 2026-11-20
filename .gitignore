@@ -16,3 +16,5 @@
 3rd/lua/lua54.dll
 skynet.exe
 *.dll
+/.zig-cache
+/zig-out
