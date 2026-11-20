@@ -12,6 +12,44 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+static struct {
+	uint32_t starttime;
+	uint64_t current;
+	uint64_t current_point;
+} timer_clock;
+
+static int
+push_timeout(uint32_t handle, int session) {
+	struct skynet_message message;
+	message.source = 0;
+	message.session = session;
+	message.data = NULL;
+	message.sz = (size_t)PTYPE_RESPONSE << MESSAGE_TYPE_SHIFT;
+	return skynet_context_push(handle, &message);
+}
+
+#ifdef SKYNET_ZIG_TIMER
+
+void skynet_zig_timer_add(uint32_t handle, uint32_t delay, int session);
+void skynet_zig_timer_tick(void);
+
+void *
+skynet_zig_timer_alloc(size_t size) {
+	return skynet_malloc(size);
+}
+
+void
+skynet_zig_timer_free(void *ptr) {
+	skynet_free(ptr);
+}
+
+void
+skynet_zig_timer_dispatch(uint32_t handle, int session) {
+	push_timeout(handle, session);
+}
+
+#else
+
 typedef void (*timer_execute_func)(void *ud,void *arg);
 
 #define TIME_NEAR_SHIFT 8
@@ -41,9 +79,6 @@ struct timer {
 	struct link_list t[4][TIME_LEVEL];
 	struct spinlock lock;
 	uint32_t time;
-	uint32_t starttime;
-	uint64_t current;
-	uint64_t current_point;
 };
 
 static struct timer * TI = NULL;
@@ -135,13 +170,7 @@ static inline void
 dispatch_list(struct timer_node *current) {
 	do {
 		struct timer_event * event = (struct timer_event *)(current+1);
-		struct skynet_message message;
-		message.source = 0;
-		message.session = event->session;
-		message.data = NULL;
-		message.sz = (size_t)PTYPE_RESPONSE << MESSAGE_TYPE_SHIFT;
-
-		skynet_context_push(event->handle, &message);
+		push_timeout(event->handle, event->session);
 		
 		struct timer_node * temp = current;
 		current=current->next;
@@ -196,28 +225,26 @@ timer_create_timer() {
 
 	SPIN_INIT(r)
 
-	r->current = 0;
-
 	return r;
 }
+
+#endif
 
 int
 skynet_timeout(uint32_t handle, int time, int session) {
 	if (time <= 0) {
-		struct skynet_message message;
-		message.source = 0;
-		message.session = session;
-		message.data = NULL;
-		message.sz = (size_t)PTYPE_RESPONSE << MESSAGE_TYPE_SHIFT;
-
-		if (skynet_context_push(handle, &message)) {
+		if (push_timeout(handle, session)) {
 			return -1;
 		}
 	} else {
+#ifdef SKYNET_ZIG_TIMER
+		skynet_zig_timer_add(handle, (uint32_t)time, session);
+#else
 		struct timer_event event;
 		event.handle = handle;
 		event.session = session;
 		timer_add(TI, &event, sizeof(event), time);
+#endif
 	}
 
 	return session;
@@ -245,37 +272,43 @@ gettime() {
 void
 skynet_updatetime(void) {
 	uint64_t cp = gettime();
-	if(cp < TI->current_point) {
-		skynet_error(NULL, "time diff error: change from %lld to %lld", cp, TI->current_point);
-		TI->current_point = cp;
-	} else if (cp != TI->current_point) {
-		uint32_t diff = (uint32_t)(cp - TI->current_point);
-		TI->current_point = cp;
-		TI->current += diff;
+	if(cp < timer_clock.current_point) {
+		skynet_error(NULL, "time diff error: change from %lld to %lld", cp, timer_clock.current_point);
+		timer_clock.current_point = cp;
+	} else if (cp != timer_clock.current_point) {
+		uint32_t diff = (uint32_t)(cp - timer_clock.current_point);
+		timer_clock.current_point = cp;
+		timer_clock.current += diff;
 		int i;
 		for (i=0;i<diff;i++) {
+#ifdef SKYNET_ZIG_TIMER
+			skynet_zig_timer_tick();
+#else
 			timer_update(TI);
+#endif
 		}
 	}
 }
 
 uint32_t
 skynet_starttime(void) {
-	return TI->starttime;
+	return timer_clock.starttime;
 }
 
 uint64_t 
 skynet_now(void) {
-	return TI->current;
+	return timer_clock.current;
 }
 
 void 
 skynet_timer_init(void) {
+#ifndef SKYNET_ZIG_TIMER
 	TI = timer_create_timer();
+#endif
 	uint32_t current = 0;
-	systime(&TI->starttime, &current);
-	TI->current = current;
-	TI->current_point = gettime();
+	systime(&timer_clock.starttime, &current);
+	timer_clock.current = current;
+	timer_clock.current_point = gettime();
 }
 
 // for profile
