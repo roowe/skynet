@@ -5,7 +5,7 @@
 ## 当前基线
 
 - 上游基线为 [`12a5e47`](https://github.com/cloudwu/skynet/commit/12a5e47eafb8ed93115ffe9ac776aec5d59655b3)。迁移在 `roowe/skynet` 的 `codex/zig-build` 分支进行。
-- [`build.zig`](../build.zig) 用 Zig `0.17.1` 在 Apple Silicon macOS 和原生 glibc Linux 上构建 Skynet。Zig 构建使用 Zig 时间轮和消息队列，Make 保留 C 实现作为对照。
+- [`build.zig`](../build.zig) 用 Zig `0.17.1` 在 Apple Silicon macOS 和原生 glibc Linux 上构建 Skynet。Zig 构建使用 Zig 时间轮、消息队列和服务 handle 表，Make 保留 C 实现作为对照。
 - [`zig build smoke`](../test/build_smoke.lua) 与 Make 产物共用离线测试，覆盖 Lua 启动、动态库加载、消息往返和定时器。构建命令见 [README](../README.md#build-with-zig)。
 
 ## 里程碑
@@ -16,14 +16,15 @@
 | 1 · 已完成 | 迁移 [`skynet_timer.c`](../skynet-src/skynet_timer.c) 的时间轮 | `zig build test-timer` 对照 C 和 Zig 的投递顺序、跨桶、`u32` 回绕和单次投递。C 桥负责立即投递、`PTYPE_RESPONSE` 和 10 ms 时钟 |
 | 2 · 已完成 | 补齐 Linux 的 Zig 构建 | [Linux CI](../.github/workflows/zig-linux.yml) 验证 jemalloc、主程序符号导出、动态模块加载及同一套冒烟测试 |
 | 3a · 已完成 | 迁移 [`skynet_mq.c`](../skynet-src/skynet_mq.c) | `zig build test-mq` 以同一份 C 用例验证服务内 FIFO、扩容、就绪队列去重和退出时的消息释放 |
-| 3b · 下一步 | 迁移 [`skynet_handle.c`](../skynet-src/skynet_handle.c)，再验证服务生命周期和 worker 调度 | 并发 `grab/retire` 时持有的引用有效；worker 交接时，同一服务的回调保持串行 |
+| 3b · 已完成 | 迁移 [`skynet_handle.c`](../skynet-src/skynet_handle.c) | `zig build test-handle` 对照注册、扩容、命名和注销；`retire` 后无法再查到服务，已取得的引用仍有效 |
+| 3c · 下一步 | 验证服务生命周期和 worker 调度 | 服务退出时，已持有引用的发送和待处理消息遵循所有权约定；worker 交接时，同一服务的回调保持串行 |
 | 4 | 迁移 [`socket_server.c`](../skynet-src/socket_server.c) 和 socket 事件桥接 | macOS `kqueue`、Linux `epoll` 各跑回环测试，覆盖连接、部分读写、待发数据期间关闭与缓冲区回收 |
 | 5 | 迁移 [`service-src/`](../service-src) 内的原生系统模块 | `logger` 可独立迁移。`gate`、`harbor` 等 socket 契约稳定后再迁。`snlua` 单独验证 Lua 状态创建、初始化失败与释放 |
 
 ## 下一步如何开工
 
-1. 先用 C 实现记录 handle 注册、查找、命名和 retire 的行为，明确查询与持有引用的区别。
-2. 迁移 handle 表并运行同一套用例；服务生命周期与 worker 的回调串行验证单独处理。
+1. 用多 worker 测试同一服务的回调保持串行，覆盖消息队列在 worker 之间交接。
+2. 测试服务退出和待处理消息释放，再划分服务生命周期与调度的迁移边界。
 
 ## 每次合入的条件
 
