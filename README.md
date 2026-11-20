@@ -39,10 +39,11 @@ On Linux, Zig builds jemalloc in its build cache. The Zig 0.17.1 compiler needs 
 zig build
 zig build test-timer
 zig build test-mq
+zig build test-handle
 zig build smoke
 ```
 
-The build installs executables in `zig-out/bin` and modules in `zig-out/cservice` and `zig-out/luaclib`. Make uses the C timer wheel and message queue; the Zig build uses their Zig implementations. The timer tests check both wheels against the same expected delivery sequence. The message queue tests run the same C fixture against both implementations. The smoke test runs a single node without opening network ports. To run it against a `make macosx` or `make linux` build:
+The build installs executables in `zig-out/bin` and modules in `zig-out/cservice` and `zig-out/luaclib`. The Zig build uses Zig implementations of the timer wheel, message queue, and service handle table. Make still uses C. Each test step checks the same behavior in both implementations. The smoke test runs a single node without opening network ports. To run it against a `make macosx` or `make linux` build:
 
 ```sh
 SKYNET_BUILD_PREFIX=. ./skynet test/config.build_smoke

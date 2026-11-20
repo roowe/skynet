@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
     const smoke = b.step("smoke", "Verify Lua startup, plugin loading, messaging, and timers");
     const test_timer = b.step("test-timer", "Compare C and Zig timer behavior with deterministic ticks");
     const test_mq = b.step("test-mq", "Run the message queue contract tests against C and Zig");
+    const test_handle = b.step("test-handle", "Run the service handle contract tests against C and Zig");
     const macos = target.result.os.tag == .macos and target.result.cpu.arch == .aarch64;
     const linux = target.result.os.tag == .linux and target.result.isGnuLibC() and target.query.isNativeTriple();
     if (!macos and !linux) {
@@ -18,6 +19,7 @@ pub fn build(b: *std.Build) void {
         smoke.dependOn(&unsupported.step);
         test_timer.dependOn(&unsupported.step);
         test_mq.dependOn(&unsupported.step);
+        test_handle.dependOn(&unsupported.step);
         return;
     }
 
@@ -90,10 +92,10 @@ pub fn build(b: *std.Build) void {
         .root = b.path("skynet-src"),
         .flags = &c_flags,
         .files = &.{
-            "skynet_main.c",    "skynet_handle.c", "skynet_module.c", "skynet_server.c",
-            "skynet_start.c",   "skynet_error.c",  "skynet_harbor.c", "skynet_env.c",
-            "skynet_monitor.c", "skynet_socket.c", "socket_server.c", "mem_info.c",
-            "malloc_hook.c",    "skynet_daemon.c", "skynet_log.c",
+            "skynet_main.c",   "skynet_module.c", "skynet_server.c", "skynet_start.c",
+            "skynet_error.c",  "skynet_harbor.c", "skynet_env.c",    "skynet_monitor.c",
+            "skynet_socket.c", "socket_server.c", "mem_info.c",      "malloc_hook.c",
+            "skynet_daemon.c", "skynet_log.c",
         },
     });
     skynet.root_module.addCSourceFile(.{
@@ -118,6 +120,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
     skynet.root_module.addObject(mq);
+    const handle = b.addObject(.{
+        .name = "skynet-zig-handle",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("skynet-src/skynet_handle.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    skynet.root_module.addObject(handle);
     b.installArtifact(skynet);
 
     for ([_][]const u8{ "snlua", "logger", "gate", "harbor" }) |name| {
@@ -179,21 +190,33 @@ pub fn build(b: *std.Build) void {
     });
     test_timer.dependOn(&b.addRunArtifact(zig_timer_tests).step);
 
-    for ([_][]const u8{ "c-mq-tests", "zig-mq-tests" }, [_]bool{ false, true }) |name, use_zig| {
-        const mq_tests = b.addExecutable(.{
-            .name = name,
+    addCAbiTests(b, target, optimize, "mq", mq, test_mq);
+    addCAbiTests(b, target, optimize, "handle", handle, test_handle);
+}
+
+fn addCAbiTests(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.Optimize,
+    component: []const u8,
+    port: *std.Build.Step.Compile,
+    step: *std.Build.Step,
+) void {
+    for ([_][]const u8{ "c", "zig" }, [_]bool{ false, true }) |implementation, use_zig| {
+        const tests = b.addExecutable(.{
+            .name = b.fmt("{s}-{s}-tests", .{ implementation, component }),
             .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
         });
-        const module = mq_tests.root_module;
+        const module = tests.root_module;
         module.addIncludePath(b.path("skynet-src"));
-        module.addCSourceFile(.{ .file = b.path("test/mq_test.c"), .flags = &c_flags });
-        if (linux) module.linkSystemLibrary("pthread", .{});
+        module.addCSourceFile(.{ .file = b.path(b.fmt("test/{s}_test.c", .{component})), .flags = &c_flags });
+        if (target.result.os.tag == .linux) module.linkSystemLibrary("pthread", .{});
         if (use_zig) {
-            module.addObject(mq);
+            module.addObject(port);
         } else {
-            module.addCSourceFile(.{ .file = b.path("skynet-src/skynet_mq.c"), .flags = &c_flags });
+            module.addCSourceFile(.{ .file = b.path(b.fmt("skynet-src/skynet_{s}.c", .{component})), .flags = &c_flags });
         }
-        test_mq.dependOn(&b.addRunArtifact(mq_tests).step);
+        step.dependOn(&b.addRunArtifact(tests).step);
     }
 }
 
